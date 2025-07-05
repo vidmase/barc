@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, forwardRef, useImperativeHandle } from "react"
 import { BrowserMultiFormatReader } from "@zxing/library"
 
 interface ScannerProps {
@@ -8,7 +8,11 @@ interface ScannerProps {
   onScanError: (error: Error) => void
 }
 
-export default function Scanner({ onScanSuccess, onScanError }: ScannerProps) {
+interface ScannerHandle {
+  captureFrame: () => string | null
+}
+
+const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onScanSuccess, onScanError }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const codeReader = useRef<BrowserMultiFormatReader | null>(null)
 
@@ -58,6 +62,19 @@ export default function Scanner({ onScanSuccess, onScanError }: ScannerProps) {
     }
   }, [onScanSuccess, onScanError])
 
+  useImperativeHandle(ref, () => ({
+    captureFrame: () => {
+      const video = videoRef.current
+      if (!video) return null
+      const canvas = document.createElement("canvas")
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      const ctx = canvas.getContext("2d")
+      ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
+      return canvas.toDataURL("image/jpeg").split(",")[1] // base64 without prefix
+    }
+  }))
+
   return (
     <div className="relative w-full h-full">
       <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />
@@ -95,4 +112,6 @@ export default function Scanner({ onScanSuccess, onScanError }: ScannerProps) {
       `}</style>
     </div>
   )
-}
+})
+
+export default Scanner

@@ -1,13 +1,15 @@
 "use client"
 
-import { useState } from "react"
-import { supabase } from "@/lib/supabase"
+import { useState, useEffect, useRef } from "react"
+import { supabase, type Scan } from "@/lib/supabase"
 import Scanner from "@/components/Scanner"
 import ScannedDisplay from "@/components/ScannedDisplay"
 import SaveButton from "@/components/SaveButton"
 import StatusMessage from "@/components/StatusMessage"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Scan, Database, Smartphone } from "lucide-react"
+import { Database, Smartphone, Barcode } from "lucide-react"
+import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
 
 export default function ScanPage() {
   const [scannedValue, setScannedValue] = useState("")
@@ -15,15 +17,62 @@ export default function ScanPage() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState("Point your camera at a barcode to scan")
   const [isScanning, setIsScanning] = useState(false)
+  const [scanHistory, setScanHistory] = useState<Scan[]>([])
+  const [loadingHistory, setLoadingHistory] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [address, setAddress] = useState("")
+  const scannerRef = useRef<any>(null)
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      setLoadingHistory(true)
+      setHistoryError(null)
+      try {
+        const { data, error } = await supabase.from("scans").select("*", { count: "exact" }).order("scanned_at", { ascending: false })
+        if (error) throw error
+        setScanHistory(data || [])
+      } catch (err: any) {
+        setHistoryError(err.message)
+      } finally {
+        setLoadingHistory(false)
+      }
+    }
+    fetchHistory()
+  }, [])
 
   // Handle successful barcode scan
-  const handleScanSuccess = (result: string) => {
+  const handleScanSuccess = async (result: string) => {
     if (result && result !== scannedValue) {
       console.log("Scanned:", result)
       setScannedValue(result)
       setStatusMessage(`Barcode detected: ${result}`)
       setSaveError(null)
       setIsScanning(false)
+
+      // --- Gemini integration ---
+      if (scannerRef.current && scannerRef.current.captureFrame) {
+        const image_base64 = scannerRef.current.captureFrame()
+        if (image_base64) {
+          setStatusMessage("Extracting address from image...")
+          try {
+            const res = await fetch("/api/scan-with-image", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ barcode_value: result, image_base64 }),
+            })
+            const data = await res.json()
+            if (data.success) {
+              setStatusMessage("✅ Saved with address: " + (data.data[0]?.extracted_address || "(none)"))
+              // Optionally, refresh scan history here
+            } else {
+              setStatusMessage("❌ Error: " + (data.error || "Unknown error"))
+            }
+          } catch (err: any) {
+            setStatusMessage("❌ Error: " + err.message)
+          }
+        }
+      }
+      // --- End Gemini integration ---
     }
   }
 
@@ -54,6 +103,7 @@ export default function ScanPage() {
         {
           barcode_value: scannedValue,
           scanned_at: new Date().toISOString(),
+          address: address.trim() || null,
         },
       ])
 
@@ -63,6 +113,7 @@ export default function ScanPage() {
 
       // Success
       setScannedValue("")
+      setAddress("")
       setStatusMessage("✅ Saved successfully!")
       console.log("Saved data:", data)
 
@@ -100,7 +151,7 @@ export default function ScanPage() {
           <CardHeader className="text-center pb-4">
             <div className="flex items-center justify-center gap-2 mb-2">
               <div className="p-2 bg-blue-600 rounded-full">
-                <Scan className="h-6 w-6 text-white" />
+                <Barcode className="h-6 w-6 text-white" />
               </div>
               <CardTitle className="text-2xl font-bold text-gray-800">Barcode Scanner</CardTitle>
             </div>
@@ -108,12 +159,28 @@ export default function ScanPage() {
           </CardHeader>
         </Card>
 
+        {/* Address Input */}
+        <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm">
+          <CardHeader>
+            <CardTitle className="text-lg font-bold">Delivery Address</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Input
+              type="text"
+              placeholder="Enter delivery address..."
+              value={address}
+              onChange={e => setAddress(e.target.value)}
+              className="w-full"
+            />
+          </CardContent>
+        </Card>
+
         {/* Scanner Area */}
         <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm overflow-hidden">
           <CardContent className="p-0">
             <div className="aspect-square relative bg-gray-900 flex items-center justify-center">
               {isScanning ? (
-                <Scanner onScanSuccess={handleScanSuccess} onScanError={handleScanError} />
+                <Scanner ref={scannerRef} onScanSuccess={handleScanSuccess} onScanError={handleScanError} />
               ) : (
                 <div className="text-center text-white p-8">
                   <Smartphone className="h-16 w-16 mx-auto mb-4 opacity-50" />
@@ -159,6 +226,41 @@ export default function ScanPage() {
               <Database className="h-5 w-5 text-blue-600" />
               <span>Data is securely stored in Supabase</span>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Scan History Table */}
+        <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm">
+          <CardHeader>
+            <CardTitle className="text-lg font-bold">Scan History</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loadingHistory ? (
+              <div className="text-gray-500">Loading...</div>
+            ) : historyError ? (
+              <div className="text-red-600">{historyError}</div>
+            ) : scanHistory.length === 0 ? (
+              <div className="text-gray-500">No scans yet.</div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Address</TableHead>
+                    <TableHead>Barcode</TableHead>
+                    <TableHead>Scanned At</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {scanHistory.map((scan) => (
+                    <TableRow key={scan.id}>
+                      <TableCell>{scan.address || "-"}</TableCell>
+                      <TableCell>{scan.barcode_value}</TableCell>
+                      <TableCell>{new Date(scan.scanned_at).toLocaleString()}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
       </div>
