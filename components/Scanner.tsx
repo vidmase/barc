@@ -38,20 +38,15 @@ const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onSca
           throw new Error("No camera found")
         }
 
-        // Prefer back camera for mobile devices
-        const backCamera =
-          videoInputDevices.find(
-            (device) => device.label.toLowerCase().includes("back") || device.label.toLowerCase().includes("rear"),
-          ) || videoInputDevices[0]
-
-        // Request higher resolution for better scan quality
+        // Request higher resolution for better scan quality and prefer rear camera
         const constraints = {
           video: {
-            deviceId: { exact: backCamera.deviceId },
+            facingMode: { ideal: "environment" },
             width: { ideal: 1280 },
             height: { ideal: 720 },
           },
         }
+
         // Get media stream manually to set constraints
         const stream = await navigator.mediaDevices.getUserMedia(constraints)
         videoElement.srcObject = stream
