@@ -3,13 +3,19 @@
 import { useState, useEffect, useRef } from "react"
 import { supabase, type Scan } from "@/lib/supabase"
 import Scanner from "@/components/Scanner"
-import ScannedDisplay from "@/components/ScannedDisplay"
-import SaveButton from "@/components/SaveButton"
 import StatusMessage from "@/components/StatusMessage"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Database, Smartphone, Barcode } from "lucide-react"
+import { Database, Smartphone, Barcode, Trash2 } from "lucide-react"
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
+import { ProductDetails } from "@/components/ProductDetails"
+
+interface Product {
+  name: string;
+  description: string;
+  imageUrl: string;
+  barcode: string;
+}
 
 export default function ScanPage() {
   const [scannedValue, setScannedValue] = useState("")
@@ -22,6 +28,7 @@ export default function ScanPage() {
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [address, setAddress] = useState("")
   const scannerRef = useRef<any>(null)
+  const [product, setProduct] = useState<Product | null>(null)
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -39,6 +46,21 @@ export default function ScanPage() {
     }
     fetchHistory()
   }, [])
+
+  useEffect(() => {
+    if (scannedValue) {
+      // In a real app, you would fetch product details from your database
+      // based on the scannedData (barcode)
+      setProduct({
+        name: "Example Product",
+        description: "This is a fantastic product that you will love.",
+        imageUrl: "/placeholder.jpg",
+        barcode: scannedValue,
+      })
+    } else {
+      setProduct(null);
+    }
+  }, [scannedValue])
 
   // Handle successful barcode scan
   const handleScanSuccess = async (result: string) => {
@@ -143,6 +165,16 @@ export default function ScanPage() {
     setStatusMessage("Scanning stopped")
   }
 
+  // Delete a scan by id
+  const handleDelete = async (id: string) => {
+    try {
+      await supabase.from("scans").delete().eq("id", id)
+      setScanHistory((prev) => prev.filter((scan) => scan.id !== id))
+    } catch (err: any) {
+      setStatusMessage("❌ Error deleting: " + err.message)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
       <div className="max-w-md mx-auto space-y-6">
@@ -201,14 +233,10 @@ export default function ScanPage() {
         <StatusMessage message={statusMessage} error={saveError} />
 
         {/* Scanned Value Display */}
-        {scannedValue && <ScannedDisplay value={scannedValue} />}
+        <ProductDetails product={product} />
 
         {/* Action Buttons */}
         <div className="space-y-3">
-          {scannedValue && (
-            <SaveButton onClick={handleSave} disabled={isSaving || !scannedValue} isLoading={isSaving} />
-          )}
-
           {isScanning && (
             <button
               onClick={stopScanning}
@@ -248,6 +276,7 @@ export default function ScanPage() {
                     <TableHead>Address</TableHead>
                     <TableHead>Barcode</TableHead>
                     <TableHead>Scanned At</TableHead>
+                    <TableHead>Delete</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -256,6 +285,15 @@ export default function ScanPage() {
                       <TableCell>{scan.address || "-"}</TableCell>
                       <TableCell>{scan.barcode_value}</TableCell>
                       <TableCell>{new Date(scan.scanned_at).toLocaleString()}</TableCell>
+                      <TableCell>
+                        <button
+                          onClick={() => handleDelete(scan.id)}
+                          className="text-red-600 hover:text-red-800 p-1"
+                          title="Delete scan"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
