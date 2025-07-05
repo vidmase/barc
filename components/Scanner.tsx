@@ -62,9 +62,11 @@ const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onSca
             }
           } catch (error) {
             // NotFoundException means no barcode found in this frame, continue
-            // Other errors can be logged
-            if (error && typeof error === 'object' && 'name' in error && (error as any).name !== "NotFoundException") {
+            // Other errors can be logged and reported
+            if (error && typeof error === 'object' && 'name'in error && (error as any).name !== "NotFoundException") {
               console.warn("Scan error:", error)
+              onScanError(error as Error);
+              break; // Stop the loop on a persistent error
             }
             // Retry after a short delay for better sensitivity
             await new Promise(res => setTimeout(res, 100))
