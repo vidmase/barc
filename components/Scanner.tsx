@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, forwardRef, useImperativeHandle } from "react"
-import { BrowserMultiFormatReader } from "@zxing/library"
+import { BrowserMultiFormatReader, DecodeHintType, BarcodeFormat, NotFoundException, Result, Exception } from "@zxing/library"
 
 interface ScannerProps {
   onScanSuccess: (result: string) => void
@@ -17,9 +17,16 @@ const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onSca
   const codeReader = useRef<BrowserMultiFormatReader | null>(null)
 
   useEffect(() => {
+    let stop = false
     const startScanning = async () => {
       try {
-        codeReader.current = new BrowserMultiFormatReader()
+        // Set up ZXing hints for better sensitivity
+        const hints = new Map()
+        hints.set(DecodeHintType.TRY_HARDER, true)
+        // Optionally, specify formats if you know them:
+        // hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.EAN_13, ...])
+
+        codeReader.current = new BrowserMultiFormatReader(hints)
 
         const videoElement = videoRef.current
         if (!videoElement) return
@@ -37,25 +44,46 @@ const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onSca
             (device) => device.label.toLowerCase().includes("back") || device.label.toLowerCase().includes("rear"),
           ) || videoInputDevices[0]
 
-        // Start decoding
-        codeReader.current.decodeFromVideoDevice(backCamera.deviceId, videoElement, (result, error) => {
-          if (result) {
-            onScanSuccess(result.getText())
+        // Request higher resolution for better scan quality
+        const constraints = {
+          video: {
+            deviceId: { exact: backCamera.deviceId },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        }
+        // Get media stream manually to set constraints
+        const stream = await navigator.mediaDevices.getUserMedia(constraints)
+        videoElement.srcObject = stream
+        await videoElement.play()
+
+        // Continuous scan loop using Promise style
+        while (!stop) {
+          try {
+            const result = await codeReader.current.decodeFromVideoElement(videoElement)
+            if (result) {
+              onScanSuccess(result.getText())
+              break // Stop after successful scan
+            }
+          } catch (error) {
+            // NotFoundException means no barcode found in this frame, continue
+            // Other errors can be logged
+            if (error && typeof error === 'object' && 'name' in error && (error as any).name !== "NotFoundException") {
+              console.warn("Scan error:", error)
+            }
+            // Retry after a short delay for better sensitivity
+            await new Promise(res => setTimeout(res, 100))
           }
-          if (error && error.name !== "NotFoundException") {
-            console.warn("Scan error:", error)
-          }
-        })
+        }
       } catch (error) {
         console.error("Scanner initialization error:", error)
         onScanError(error as Error)
       }
     }
-
     startScanning()
-
     // Cleanup
     return () => {
+      stop = true
       if (codeReader.current) {
         codeReader.current.reset()
       }
