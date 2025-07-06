@@ -41,7 +41,7 @@ const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onSca
         // Request higher resolution for better scan quality and prefer rear camera
         const constraints = {
           video: {
-            facingMode: { ideal: "environment" },
+            facingMode: { ideal: "user" },
             width: { ideal: 1280 },
             height: { ideal: 720 },
           },
