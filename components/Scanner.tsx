@@ -15,21 +15,42 @@ interface ScannerHandle {
 const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onScanSuccess, onScanError }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const codeReader = useRef<BrowserMultiFormatReader | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
 
   useEffect(() => {
     let stop = false
+    let isInitializing = false
+
+    const cleanup = () => {
+      stop = true
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+        streamRef.current = null
+      }
+      if (codeReader.current) {
+        codeReader.current.reset()
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null
+      }
+    }
+
     const startScanning = async () => {
+      if (isInitializing) return
+      isInitializing = true
+
       try {
+        // Clean up any existing stream first
+        cleanup()
+
         // Set up ZXing hints for better sensitivity
         const hints = new Map()
         hints.set(DecodeHintType.TRY_HARDER, true)
-        // Optionally, specify formats if you know them:
-        // hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.EAN_13, ...])
 
         codeReader.current = new BrowserMultiFormatReader(hints)
 
         const videoElement = videoRef.current
-        if (!videoElement) return
+        if (!videoElement || stop) return
 
         // Get video devices
         const videoInputDevices = await codeReader.current.listVideoInputDevices()
@@ -38,10 +59,10 @@ const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onSca
           throw new Error("No camera found")
         }
 
-        // Request higher resolution for better scan quality and prefer rear camera
+        // Request higher resolution for better scan quality and prefer front camera
         const constraints = {
           video: {
-            facingMode: { ideal: "environment" },
+            facingMode: { ideal: "user" },
             width: { ideal: 1280 },
             height: { ideal: 720 },
           },
@@ -49,24 +70,51 @@ const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onSca
 
         // Get media stream manually to set constraints
         const stream = await navigator.mediaDevices.getUserMedia(constraints)
+        if (stop) {
+          stream.getTracks().forEach(track => track.stop())
+          return
+        }
+
+        streamRef.current = stream
         videoElement.srcObject = stream
+
+        // Wait for the video to be ready before playing
+        await new Promise<void>((resolve, reject) => {
+          const onLoadedMetadata = () => {
+            videoElement.removeEventListener('loadedmetadata', onLoadedMetadata)
+            videoElement.removeEventListener('error', onError)
+            resolve()
+          }
+          const onError = (e: Event) => {
+            videoElement.removeEventListener('loadedmetadata', onLoadedMetadata)
+            videoElement.removeEventListener('error', onError)
+            reject(new Error('Video loading failed'))
+          }
+          videoElement.addEventListener('loadedmetadata', onLoadedMetadata)
+          videoElement.addEventListener('error', onError)
+        })
+
+        if (stop) return
+
         await videoElement.play()
 
         // Continuous scan loop using Promise style
         while (!stop) {
           try {
             const result = await codeReader.current.decodeFromVideoElement(videoElement)
-            if (result) {
+            if (result && !stop) {
               onScanSuccess(result.getText())
               break // Stop after successful scan
             }
           } catch (error) {
             // NotFoundException means no barcode found in this frame, continue
             // Other errors can be logged and reported
-            if (error && typeof error === 'object' && 'name'in error && (error as any).name !== "NotFoundException") {
+            if (error && typeof error === 'object' && 'name' in error && (error as any).name !== "NotFoundException") {
               console.warn("Scan error:", error)
-              onScanError(error as Error);
-              break; // Stop the loop on a persistent error
+              if (!stop) {
+                onScanError(error as Error)
+              }
+              break // Stop the loop on a persistent error
             }
             // Retry after a short delay for better sensitivity
             await new Promise(res => setTimeout(res, 100))
@@ -74,17 +122,18 @@ const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onSca
         }
       } catch (error) {
         console.error("Scanner initialization error:", error)
-        onScanError(error as Error)
+        if (!stop) {
+          onScanError(error as Error)
+        }
+      } finally {
+        isInitializing = false
       }
     }
+
     startScanning()
-    // Cleanup
-    return () => {
-      stop = true
-      if (codeReader.current) {
-        codeReader.current.reset()
-      }
-    }
+
+    // Cleanup function
+    return cleanup
   }, [onScanSuccess, onScanError])
 
   useImperativeHandle(ref, () => ({
