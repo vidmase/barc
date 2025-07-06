@@ -4,11 +4,29 @@ import { createClient } from "@supabase/supabase-js"
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error("Supabase URL and ANON key must be provided.")
+// Check if we have valid Supabase credentials
+const hasValidCredentials = supabaseUrl && supabaseAnonKey && 
+  supabaseUrl !== "https://your-project-id.supabase.co" &&
+  supabaseAnonKey !== "your-supabase-anon-key"
+
+if (!hasValidCredentials) {
+  console.warn("Supabase credentials not configured. Database features will be disabled.")
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// Create a mock client for development if credentials are not available
+const mockClient = {
+  from: () => ({
+    select: () => ({ data: [], error: null }),
+    insert: () => ({ data: [], error: null }),
+    delete: () => ({ data: [], error: null }),
+    eq: () => ({ data: [], error: null }),
+    order: () => ({ data: [], error: null })
+  })
+}
+
+export const supabase = hasValidCredentials 
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : mockClient as any
 
 // Database types
 export interface Scan {
@@ -21,3 +39,5 @@ export interface Scan {
   ocr_text?: string
   extracted_address?: string
 }
+
+export const isSupabaseConfigured = hasValidCredentials

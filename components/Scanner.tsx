@@ -15,74 +15,158 @@ interface ScannerHandle {
 const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onScanSuccess, onScanError }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const codeReader = useRef<BrowserMultiFormatReader | null>(null)
+  const scanningRef = useRef(false)
+  const streamRef = useRef<MediaStream | null>(null)
 
   useEffect(() => {
-    let stop = false
     const startScanning = async () => {
       try {
-        // Set up ZXing hints for better sensitivity
+        // Check for camera permissions first
+        const permissionStatus = await navigator.permissions.query({ name: 'camera' as PermissionName })
+        if (permissionStatus.state === 'denied') {
+          throw new Error("Camera permission denied")
+        }
+
+        // Set up ZXing hints for better barcode detection
         const hints = new Map()
         hints.set(DecodeHintType.TRY_HARDER, true)
-        // Optionally, specify formats if you know them:
-        // hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.EAN_13, ...])
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.CODE_128,
+          BarcodeFormat.CODE_39,
+          BarcodeFormat.CODE_93,
+          BarcodeFormat.EAN_13,
+          BarcodeFormat.EAN_8,
+          BarcodeFormat.UPC_A,
+          BarcodeFormat.UPC_E,
+          BarcodeFormat.QR_CODE,
+          BarcodeFormat.DATA_MATRIX,
+          BarcodeFormat.PDF_417,
+          BarcodeFormat.CODABAR,
+          BarcodeFormat.ITF,
+          BarcodeFormat.RSS_14,
+          BarcodeFormat.RSS_EXPANDED
+        ])
 
         codeReader.current = new BrowserMultiFormatReader(hints)
 
         const videoElement = videoRef.current
         if (!videoElement) return
 
-        // Get video devices
-        const videoInputDevices = await codeReader.current.listVideoInputDevices()
-
-        if (videoInputDevices.length === 0) {
-          throw new Error("No camera found")
-        }
-
-        // Request higher resolution for better scan quality and prefer rear camera
-        const constraints = {
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+        // Try multiple camera constraints for better compatibility
+        const constraints = [
+          // Try rear camera first with high resolution
+          {
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1920, min: 640 },
+              height: { ideal: 1080, min: 480 },
+              frameRate: { ideal: 30, min: 15 }
+            }
           },
-        }
+          // Fallback to any camera with medium resolution
+          {
+            video: {
+              width: { ideal: 1280, min: 640 },
+              height: { ideal: 720, min: 480 },
+              frameRate: { ideal: 30, min: 15 }
+            }
+          },
+          // Final fallback - basic constraints
+          {
+            video: {
+              width: { min: 640 },
+              height: { min: 480 }
+            }
+          }
+        ]
 
-        // Get media stream manually to set constraints
-        const stream = await navigator.mediaDevices.getUserMedia(constraints)
-        videoElement.srcObject = stream
-        await videoElement.play()
-
-        // Continuous scan loop using Promise style
-        while (!stop) {
+        let stream: MediaStream | null = null
+        
+        // Try each constraint set until one works
+        for (const constraint of constraints) {
           try {
-            const result = await codeReader.current.decodeFromVideoElement(videoElement)
-            if (result) {
-              onScanSuccess(result.getText())
-              break // Stop after successful scan
-            }
-          } catch (error) {
-            // NotFoundException means no barcode found in this frame, continue
-            // Other errors can be logged and reported
-            if (error && typeof error === 'object' && 'name'in error && (error as any).name !== "NotFoundException") {
-              console.warn("Scan error:", error)
-              onScanError(error as Error);
-              break; // Stop the loop on a persistent error
-            }
-            // Retry after a short delay for better sensitivity
-            await new Promise(res => setTimeout(res, 100))
+            stream = await navigator.mediaDevices.getUserMedia(constraint)
+            break
+          } catch (e) {
+            console.warn("Camera constraint failed, trying next:", e)
+            continue
           }
         }
+
+        if (!stream) {
+          throw new Error("Could not access camera with any configuration")
+        }
+
+        streamRef.current = stream
+        videoElement.srcObject = stream
+
+        // Wait for video to be ready
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error("Video load timeout")), 10000)
+          
+          videoElement.onloadedmetadata = () => {
+            clearTimeout(timeout)
+            resolve(undefined)
+          }
+          
+          videoElement.onerror = () => {
+            clearTimeout(timeout)
+            reject(new Error("Video load error"))
+          }
+        })
+
+        await videoElement.play()
+        scanningRef.current = true
+
+        // Continuous scanning loop with improved error handling
+        const scanLoop = async () => {
+          while (scanningRef.current) {
+            try {
+              const result = await codeReader.current!.decodeFromVideoElement(videoElement)
+              if (result && result.getText()) {
+                console.log("Barcode detected:", result.getText())
+                onScanSuccess(result.getText())
+                return // Stop scanning after successful detection
+              }
+            } catch (error) {
+              // Only log non-NotFoundException errors
+              if (error instanceof Error && error.name !== "NotFoundException") {
+                console.warn("Scan error:", error.message)
+                // Continue scanning for most errors, but break on critical ones
+                if (error.name === "NotAllowedError" || error.name === "NotFoundError") {
+                  onScanError(error)
+                  return
+                }
+              }
+            }
+            
+            // Small delay to prevent excessive CPU usage
+            await new Promise(resolve => setTimeout(resolve, 50))
+          }
+        }
+
+        scanLoop()
+
       } catch (error) {
         console.error("Scanner initialization error:", error)
         onScanError(error as Error)
       }
     }
+
     startScanning()
-    // Cleanup
+
+    // Cleanup function
     return () => {
-      stop = true
+      scanningRef.current = false
+      
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track: MediaStreamTrack) => track.stop())
+        streamRef.current = null
+      }
+      
       if (codeReader.current) {
         codeReader.current.reset()
+        codeReader.current = null
       }
     }
   }, [onScanSuccess, onScanError])
@@ -91,12 +175,16 @@ const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onSca
     captureFrame: () => {
       const video = videoRef.current
       if (!video) return null
+      
       const canvas = document.createElement("canvas")
       canvas.width = video.videoWidth
       canvas.height = video.videoHeight
       const ctx = canvas.getContext("2d")
-      ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
-      return canvas.toDataURL("image/jpeg").split(",")[1] // base64 without prefix
+      
+      if (!ctx) return null
+      
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      return canvas.toDataURL("image/jpeg", 0.8).split(",")[1] // base64 without prefix
     }
   }))
 
@@ -116,25 +204,18 @@ const Scanner = forwardRef<ScannerHandle, ScannerProps>(function Scanner({ onSca
 
             {/* Scanning line animation */}
             <div className="absolute inset-0 overflow-hidden rounded-lg">
-              <div
-                className="absolute w-full h-0.5 bg-blue-400 animate-pulse"
-                style={{
-                  animation: "scan 2s linear infinite",
-                  top: "50%",
-                }}
-              ></div>
+              <div className="absolute w-full h-0.5 bg-blue-400 animate-pulse scan-line"></div>
             </div>
           </div>
         </div>
       </div>
 
-      <style jsx>{`
-        @keyframes scan {
-          0% { top: 0; }
-          50% { top: 100%; }
-          100% { top: 0; }
-        }
-      `}</style>
+      {/* Instructions overlay */}
+      <div className="absolute bottom-4 left-4 right-4 text-center">
+        <div className="bg-black bg-opacity-50 text-white px-4 py-2 rounded-lg text-sm">
+          Hold steady and ensure barcode is well-lit and in focus
+        </div>
+      </div>
     </div>
   )
 })

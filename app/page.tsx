@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { supabase, type Scan } from "@/lib/supabase"
+import { supabase, type Scan, isSupabaseConfigured } from "@/lib/supabase"
 import Scanner from "@/components/Scanner"
 import StatusMessage from "@/components/StatusMessage"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -252,7 +252,11 @@ export default function ScanPage() {
           <CardContent className="p-4">
             <div className="flex items-center gap-3 text-sm text-gray-600">
               <Database className="h-5 w-5 text-blue-600" />
-              <span>Data is securely stored in Supabase</span>
+              <span>
+                {isSupabaseConfigured 
+                  ? "Data is securely stored in Supabase" 
+                  : "Database not configured - scanner will work but data won't be saved"}
+              </span>
             </div>
           </CardContent>
         </Card>
